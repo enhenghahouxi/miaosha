@@ -44,7 +44,7 @@ public class MiaoshaUserService {
         //延长有效期
         //生成session，并把session放到redis
         if (user != null) {
-            addCookie(response, user);
+            addCookie(response, token, user);
         }
         return user;
     }
@@ -68,7 +68,8 @@ public class MiaoshaUserService {
             throw new GlobalException(CodeMsg.PASSWORD_ERROR);
         }
         //生成session，并把session放到redis
-        addCookie(response, user);
+        String token = UUIDUtil.uuid();
+        addCookie(response, token, user);
         return true;
     }
 
@@ -78,8 +79,7 @@ public class MiaoshaUserService {
      * @param response
      * @param user
      */
-    private void addCookie(HttpServletResponse response, MiaoshaUser user) {
-        String token = UUIDUtil.uuid();
+    private void addCookie(HttpServletResponse response, String token, MiaoshaUser user) {
         redisService.set(MiaoshaUserKey.token, token, user);
         Cookie cookie = new Cookie(COOKIE_NAME_TOKEN, token);
         cookie.setMaxAge(MiaoshaUserKey.token.expireSeconds());

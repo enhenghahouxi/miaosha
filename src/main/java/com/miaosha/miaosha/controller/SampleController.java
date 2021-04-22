@@ -27,8 +27,8 @@ public class SampleController {
     @Resource
     private RedisService redisService;
 
-    @RequestMapping("/hello/thymeleaf")
-    public String thymeleaf(Model model) {
+    @RequestMapping("/hello/themaleaf")
+    public String themaleaf(Model model) {
         model.addAttribute("name", "enhenghahouxi");
         return "hello";
     }
