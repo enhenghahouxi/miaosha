@@ -44,6 +44,12 @@ public class MD5Util {
         return dbPass;
     }
 
+    public static String inputPassToDbPass(String inputPass, String saltDB) {
+        String formPass = inputPassFormPass(inputPass);
+        String dbPass = formPassToDBPass(formPass, saltDB);
+        return dbPass;
+    }
+
     public static void main(String[] args) {
         System.out.println(inputPassToDBPass("123456", "1a2b3c4d"));
     }

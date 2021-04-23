@@ -22,6 +22,10 @@ public class GoodsController {
     @Resource
     private GoodsService goodsService;
 
+    /**
+     * QPS 578
+     * 5000 * 10
+     */
     @RequestMapping("/to_list")
     public String list(Model model, MiaoshaUser user) {
         model.addAttribute("user", user);
