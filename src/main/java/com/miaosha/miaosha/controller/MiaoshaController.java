@@ -34,6 +34,10 @@ public class MiaoshaController {
     @Resource
     private MiaoshaService miaoshaService;
 
+    /**
+     * QPS 700
+     * 5000 * 10
+     */
     @RequestMapping("/do_miaosha")
     public String list(Model model, MiaoshaUser user,
                        @RequestParam("goodsId")long goodsId) {
