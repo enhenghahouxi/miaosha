@@ -33,6 +33,7 @@ public class GoodsService {
     public void reduceStock(GoodsVo goods) {
         MiaoshaGoods g = new MiaoshaGoods();
         g.setGoodsId(goods.getId());
+        //卖超情况：当库存还有1时，同时来了来了两个线程，库存同时减两个1，减成-1。解决方法：数据库判断库存大于0才进行减
         goodsDao.reduceStock(g);
     }
 }

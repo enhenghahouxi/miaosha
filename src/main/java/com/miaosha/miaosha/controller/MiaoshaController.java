@@ -4,15 +4,14 @@ import com.miaosha.miaosha.domain.MiaoshaOrder;
 import com.miaosha.miaosha.domain.MiaoshaUser;
 import com.miaosha.miaosha.domain.OrderInfo;
 import com.miaosha.miaosha.result.CodeMsg;
+import com.miaosha.miaosha.result.Result;
 import com.miaosha.miaosha.service.GoodsService;
 import com.miaosha.miaosha.service.MiaoshaService;
 import com.miaosha.miaosha.service.OrderService;
 import com.miaosha.miaosha.vo.GoodsVo;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.*;
 
 import javax.annotation.Resource;
 import java.util.List;
@@ -35,35 +34,35 @@ public class MiaoshaController {
     private MiaoshaService miaoshaService;
 
     /**
-     * QPS 700
+     * 自己电脑
+     * 没用redis: QPS 700
+     * 用redis: QPS 1150
      * 5000 * 10
      */
-    @RequestMapping("/do_miaosha")
-    public String list(Model model, MiaoshaUser user,
+    @RequestMapping(value = "/do_miaosha", method = RequestMethod.POST)
+    @ResponseBody
+    public Result<OrderInfo> miaosha(Model model, MiaoshaUser user,
                        @RequestParam("goodsId")long goodsId) {
         model.addAttribute("user", user);
         if (user == null) {
-            return "login";
+            return Result.error(CodeMsg.SESSION_ERROR);
         }
         //判断库存
+        //卖超情况:10个商品，同时两个请求，判断是否秒杀到，就都能够秒杀，然后一个用户同时秒杀到两个, 解决方法：数据库加用户ID和商品ID的联合索引
         GoodsVo goods = goodsService.getGoodsVoByGoodsId(goodsId);
         int stock = goods.getStockCount();
         if (stock <= 0) {
             model.addAttribute("errmsg", CodeMsg.MIAO_SHA_OVER.getMsg());
-            return "miaosha_fail";
+            return Result.error(CodeMsg.MIAO_SHA_OVER);
         }
         //判断是否已经秒杀到了
         MiaoshaOrder order = orderService.getMiaoshaOrderByUserIdGoodsId(user.getId(), goodsId);
         if (order != null) {
-            model.addAttribute("errmsg", CodeMsg.REPEAT_MIAOSHA.getMsg());
-            return "miaosha_fail";
+            return Result.error(CodeMsg.REPEAT_MIAOSHA);
         }
         //进行秒杀，减库存，下订单，写入秒杀订单
         OrderInfo orderInfo = miaoshaService.miaosha(user, goods);
-        model.addAttribute("orderInfo", orderInfo);
-        model.addAttribute("goods", goods);
-
-        return "order_detail";
+        return Result.success(orderInfo);
     }
 
 }
