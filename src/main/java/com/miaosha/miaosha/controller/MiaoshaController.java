@@ -3,18 +3,27 @@ package com.miaosha.miaosha.controller;
 import com.miaosha.miaosha.domain.MiaoshaOrder;
 import com.miaosha.miaosha.domain.MiaoshaUser;
 import com.miaosha.miaosha.domain.OrderInfo;
+import com.miaosha.miaosha.rabbitmq.MQSender;
+import com.miaosha.miaosha.rabbitmq.MiaoshaMessage;
+import com.miaosha.miaosha.redis.GoodsKey;
+import com.miaosha.miaosha.redis.MiaoshaKey;
+import com.miaosha.miaosha.redis.OrderKey;
+import com.miaosha.miaosha.redis.RedisService;
 import com.miaosha.miaosha.result.CodeMsg;
 import com.miaosha.miaosha.result.Result;
 import com.miaosha.miaosha.service.GoodsService;
 import com.miaosha.miaosha.service.MiaoshaService;
 import com.miaosha.miaosha.service.OrderService;
 import com.miaosha.miaosha.vo.GoodsVo;
+import org.springframework.beans.factory.InitializingBean;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
 
 import javax.annotation.Resource;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * @Author 嗯哼哈吼嘻
@@ -22,7 +31,7 @@ import java.util.List;
  */
 @Controller
 @RequestMapping("/miaosha")
-public class MiaoshaController {
+public class MiaoshaController implements InitializingBean {
 
     @Resource
     private GoodsService goodsService;
@@ -33,20 +42,89 @@ public class MiaoshaController {
     @Resource
     private MiaoshaService miaoshaService;
 
+    @Resource
+    private RedisService redisService;
+
+    @Resource
+    private MQSender sender;
+
+    private Map<Long, Boolean> localOverMap = new HashMap<Long, Boolean>();
+
+    /**
+     * 系统初始化，将所有商品库存放入redis，预减库存
+     */
+    public void afterPropertiesSet() throws Exception {
+        List<GoodsVo> goodsList = goodsService.listGoodsVo();
+        if (goodsList == null) {
+            return;
+        }
+        for(GoodsVo goods : goodsList) {
+            redisService.set(GoodsKey.getMiaoshaGoodsStock, "" + goods.getId(), goods.getStockCount());
+            localOverMap.put(goods.getId(), false);
+        }
+    }
+
+    @RequestMapping(value="/reset", method=RequestMethod.GET)
+    @ResponseBody
+    public Result<Boolean> reset(Model model) {
+        List<GoodsVo> goodsList = goodsService.listGoodsVo();
+        for(GoodsVo goods : goodsList) {
+            goods.setStockCount(10);
+            redisService.set(GoodsKey.getMiaoshaGoodsStock, ""+goods.getId(), 10);
+            localOverMap.put(goods.getId(), false);
+        }
+        redisService.delete(OrderKey.getMiaoshaOrderByUidGid);
+        redisService.delete(MiaoshaKey.isGoodsOver);
+        miaoshaService.reset(goodsList);
+        return Result.success(true);
+    }
+
     /**
      * 自己电脑
      * 没用redis: QPS 700
-     * 用redis: QPS 1150
+     * 用redis(redis加了是否已经秒杀到的逻辑): QPS 1150
      * 5000 * 10
      */
     @RequestMapping(value = "/do_miaosha", method = RequestMethod.POST)
     @ResponseBody
-    public Result<OrderInfo> miaosha(Model model, MiaoshaUser user,
+    public Result<Integer> miaosha(Model model, MiaoshaUser user,
                        @RequestParam("goodsId")long goodsId) {
         model.addAttribute("user", user);
+        //判断用户
         if (user == null) {
             return Result.error(CodeMsg.SESSION_ERROR);
         }
+
+        //使用本地内存标记，来减少redis访问
+        //这种情况来几万个、几十万个请求，服务器基本没有压力
+        boolean over = localOverMap.get(goodsId);
+        if(over) {
+            return Result.error(CodeMsg.MIAO_SHA_OVER);
+        }
+
+        //redis预减库存
+        long stock = redisService.decr(GoodsKey.getMiaoshaGoodsStock, "" + goodsId);
+        if (stock <= 0) {
+            localOverMap.put(goodsId, true);
+            return Result.error(CodeMsg.MIAO_SHA_OVER);
+        }
+
+        //判断是否已经秒杀到了
+        MiaoshaOrder order = orderService.getMiaoshaOrderByUserIdGoodsId(user.getId(), goodsId);
+        if (order != null) {
+            return Result.error(CodeMsg.REPEAT_MIAOSHA);
+        }
+
+        //异步下单，用了消息队列，然后客户端进行轮询是否秒杀成功
+        //入队
+        MiaoshaMessage mm = new MiaoshaMessage();
+        mm.setUser(user);
+        mm.setGoodsId(goodsId);
+        sender.sendMiaoshaMessage(mm);
+
+        return Result.success(0);//排队中
+
+        /*
         //判断库存
         //卖超情况:10个商品，同时两个请求，判断是否秒杀到，就都能够秒杀，然后一个用户同时秒杀到两个, 解决方法：数据库加用户ID和商品ID的联合索引
         GoodsVo goods = goodsService.getGoodsVoByGoodsId(goodsId);
@@ -63,6 +141,25 @@ public class MiaoshaController {
         //进行秒杀，减库存，下订单，写入秒杀订单
         OrderInfo orderInfo = miaoshaService.miaosha(user, goods);
         return Result.success(orderInfo);
+        */
+    }
+
+    /**
+     * orderId:代表成功
+     * -1：代表秒杀失败
+     * 0：排队中
+     */
+    @RequestMapping(value = "/result", method = RequestMethod.GET)
+    @ResponseBody
+    public Result<Long> miaoshaResult(Model model, MiaoshaUser user,
+                                   @RequestParam("goodsId")long goodsId) {
+        model.addAttribute("user", user);
+        //判断用户
+        if (user == null) {
+            return Result.error(CodeMsg.SESSION_ERROR);
+        }
+        long result = miaoshaService.getMiaoshaResult(user.getId(), goodsId);
+        return Result.success(result);
     }
 
 }
