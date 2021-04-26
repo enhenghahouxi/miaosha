@@ -1,26 +1,32 @@
 package com.miaosha.miaosha.controller;
 
+import com.miaosha.miaosha.access.AccessLimit;
 import com.miaosha.miaosha.domain.MiaoshaOrder;
 import com.miaosha.miaosha.domain.MiaoshaUser;
 import com.miaosha.miaosha.domain.OrderInfo;
 import com.miaosha.miaosha.rabbitmq.MQSender;
 import com.miaosha.miaosha.rabbitmq.MiaoshaMessage;
-import com.miaosha.miaosha.redis.GoodsKey;
-import com.miaosha.miaosha.redis.MiaoshaKey;
-import com.miaosha.miaosha.redis.OrderKey;
-import com.miaosha.miaosha.redis.RedisService;
+import com.miaosha.miaosha.redis.*;
 import com.miaosha.miaosha.result.CodeMsg;
 import com.miaosha.miaosha.result.Result;
 import com.miaosha.miaosha.service.GoodsService;
 import com.miaosha.miaosha.service.MiaoshaService;
 import com.miaosha.miaosha.service.OrderService;
+import com.miaosha.miaosha.util.MD5Util;
+import com.miaosha.miaosha.util.UUIDUtil;
 import com.miaosha.miaosha.vo.GoodsVo;
+import com.rabbitmq.client.AMQP;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
 
 import javax.annotation.Resource;
+import javax.imageio.ImageIO;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import java.awt.image.BufferedImage;
+import java.io.OutputStream;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -85,14 +91,20 @@ public class MiaoshaController implements InitializingBean {
      * 用redis(redis加了是否已经秒杀到的逻辑): QPS 1150
      * 5000 * 10
      */
-    @RequestMapping(value = "/do_miaosha", method = RequestMethod.POST)
+    @RequestMapping(value = "/{path}/do_miaosha", method = RequestMethod.POST)
     @ResponseBody
     public Result<Integer> miaosha(Model model, MiaoshaUser user,
-                       @RequestParam("goodsId")long goodsId) {
+                       @RequestParam("goodsId")long goodsId, @PathVariable("path")String path) {
         model.addAttribute("user", user);
         //判断用户
         if (user == null) {
             return Result.error(CodeMsg.SESSION_ERROR);
+        }
+
+        //验证path
+        boolean check = miaoshaService.checkPath(user, goodsId, path);
+        if (!check) {
+            return Result.error(CodeMsg.REQUEST_ILLEGAL);
         }
 
         //使用本地内存标记，来减少redis访问
@@ -160,6 +172,47 @@ public class MiaoshaController implements InitializingBean {
         }
         long result = miaoshaService.getMiaoshaResult(user.getId(), goodsId);
         return Result.success(result);
+    }
+
+    @AccessLimit(seconds = 5, maxCount = 5, needLogin = true)
+    @RequestMapping(value = "/path", method = RequestMethod.GET)
+    @ResponseBody
+    public Result<String> getMiaoshaPath(HttpServletRequest request, MiaoshaUser user,
+                                         @RequestParam("goodsId")long goodsId,
+                                         @RequestParam(value = "verifyCode", defaultValue = "0")int verifyCode) {
+        //判断用户
+        if (user == null) {
+            return Result.error(CodeMsg.SESSION_ERROR);
+        }
+
+        //验证验证码是否成功
+        boolean check = miaoshaService.crheckVerifyCode(user, goodsId, verifyCode);
+        if (!check) {
+            return Result.error(CodeMsg.REQUEST_ILLEGAL);
+        }
+        String path = miaoshaService.createMiaoshaPath(user, goodsId);
+        return Result.success(path);
+    }
+
+    @RequestMapping(value = "/verifyCode", method = RequestMethod.GET)
+    @ResponseBody
+    public Result<String> getMiaoshaVerifyCode(HttpServletResponse response, MiaoshaUser user,
+                                               @RequestParam("goodsId")long goodsId) {
+        //判断用户
+        if (user == null) {
+            return Result.error(CodeMsg.SESSION_ERROR);
+        }
+        BufferedImage image = miaoshaService.createVerifyCode(user, goodsId);
+        try {
+            OutputStream out = response.getOutputStream();
+            ImageIO.write(image, "JPEG", out);
+            out.flush();
+            out.close();
+        } catch (Exception e) {
+            e.printStackTrace();
+            return Result.error(CodeMsg.MIAOSHA_FAIL);
+        }
+        return null;
     }
 
 }
